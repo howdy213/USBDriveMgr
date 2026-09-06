@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="USBDriveMgr.vcxproj" />
+  <Project Path="USBDriveMgr.vcxproj" Id="aae19684-fe03-49ed-a395-e4d3207aeead" />
 </Solution>

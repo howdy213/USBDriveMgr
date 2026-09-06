@@ -47,6 +47,7 @@ MainWindow::~MainWindow() {
 	if (m_hFont) DeleteObject(m_hFont);
 	if (m_hIconLarge) DestroyIcon(m_hIconLarge);
 	if (m_hIconSmall) DestroyIcon(m_hIconSmall);
+	if (m_hMenu) DestroyMenu(m_hMenu);
 }
 
 bool MainWindow::Create() {
@@ -95,6 +96,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 	switch (msg) {
 	case WM_CREATE:
 		CreateControls();
+		CreateMenuBar();
 		RefreshDriveList();
 		SetTimer(m_hWnd, IDT_REFRESH_DRIVES, 2000, nullptr);
 		return 0;
@@ -124,6 +126,23 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 		case IDC_BTN_EJECT:
 			EjectSelectedDrive();
 			break;
+		case ID_FILE_EXIT:
+			DestroyWindow(m_hWnd);
+			break;
+		case ID_HELP_ABOUT:
+			MessageBoxW(m_hWnd,
+				L"　　　　USB设备管理器"
+				L"　　　　　　　　　　　　　　　　　　\n"
+				L"　　　　版本 v1.0.0\n"
+				L"　　　　作者：howdy213\n"
+				L"　　　　软件在 MIT License 下发布\n",
+				L"关于", MB_OK);
+			break;
+		case ID_HELP_GITHUB:
+			ShellExecuteW(m_hWnd, L"open",
+				L"https://github.com/howdy213/USBDriveMgr",
+				nullptr, nullptr, SW_SHOWNORMAL);
+			break;
 		default:
 			return DefWindowProc(m_hWnd, msg, wParam, lParam);
 		}
@@ -150,7 +169,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 		return 0;
 
 	case WM_TRAYICON:
-		if (lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) {
+		if (lParam == WM_LBUTTONDOWN || lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) {
 			ShowTrayMenu();
 			return 0;
 		}
@@ -178,6 +197,27 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 		break;
 	}
 	return DefWindowProc(m_hWnd, msg, wParam, lParam);
+}
+
+void MainWindow::CreateMenuBar() {
+	// 创建主菜单
+	HMENU hMenuBar = CreateMenu();
+	if (!hMenuBar) return;
+
+	// 文件菜单
+	HMENU hFileMenu = CreatePopupMenu();
+	AppendMenuW(hFileMenu, MF_STRING, ID_FILE_EXIT, L"退出程序");
+	AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFileMenu, L"文件");
+
+	// 帮助菜单
+	HMENU hHelpMenu = CreatePopupMenu();
+	AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, L"关于");
+	AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GITHUB, L"转至 GitHub 仓库");
+	AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelpMenu, L"帮助");
+
+	// 设置窗口菜单
+	SetMenu(m_hWnd, hMenuBar);
+	m_hMenu = hMenuBar;
 }
 
 void MainWindow::CreateControls() {
