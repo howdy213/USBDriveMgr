@@ -1,16 +1,14 @@
 ﻿#pragma once
 #include "WinPch.h"
 
-#include <Windows.h>
-#include <shellapi.h>
 #include <string>
 #include <vector>
+#include <shellapi.h>
 
 class MainWindow {
 public:
 	MainWindow(HINSTANCE hInstance);
 	~MainWindow();
-
 	bool Create();
 	void RunMessageLoop();
 
@@ -18,45 +16,39 @@ private:
 	static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
 
-	// 控件创建与布局
 	void CreateMenuBar();
 	void CreateControls();
 	void LayoutControls();
-
-	// 驱动器列表相关
 	void RefreshDriveList();
 	wchar_t GetSelectedDrive() const;
-
-	// 进程操作
 	void AnalyzeDrive();
 	void KillSelectedProcesses();
 	void SelectAllProcesses();
-
-	// 弹出操作
 	void EjectSelectedDrive();
-	void ShowTrayMenu();
-	void ShowNotification(const std::wstring& title, const std::wstring& message, DWORD flags = NIIF_INFO);
 	void AddTrayIcon();
 	void RemoveTrayIcon();
+	void ShowNotification(const std::wstring& title, const std::wstring& message, DWORD flags = NIIF_INFO);
+	void ShowEjectMenu();   // 新增：左键单击弹出菜单
+	void ShowMainMenu();    // 新增：右键单击主菜单
 	void OnTaskbarCreated();
 
-	// 成员
 	HINSTANCE m_hInstance;
 	HWND m_hWnd = nullptr;
+	HICON m_hIconLarge = nullptr;
+	HICON m_hIconSmall = nullptr;
+	HFONT m_hFont = nullptr;
+	HMENU m_hMenu = nullptr;
+	bool m_bIsAdmin = false;
+	UINT m_uTaskbarRestartMsg = 0;
+	NOTIFYICONDATAW m_nid = {};
+	bool m_bIgnoreNextLButtonUp = false; // 新增：忽略双击后的单击消息
+
 	HWND m_hComboDrive = nullptr;
 	HWND m_hBtnAnalyze = nullptr;
 	HWND m_hBtnSelectAll = nullptr;
 	HWND m_hBtnKill = nullptr;
 	HWND m_hBtnEject = nullptr;
 	HWND m_hListProc = nullptr;
-	HFONT m_hFont = nullptr;
-	HICON m_hIconLarge = nullptr;
-	HICON m_hIconSmall = nullptr;
-	HICON m_hTrayIcon = nullptr;
-	HMENU m_hMenu = nullptr;
-	NOTIFYICONDATAW m_nid{};
-	UINT m_uTaskbarRestartMsg = 0;
-	bool m_bIsAdmin = false;
 
 	static constexpr UINT WM_TRAYICON = WM_APP + 1;
 	static constexpr UINT IDT_REFRESH_DRIVES = 2001;

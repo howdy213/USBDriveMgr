@@ -14,11 +14,13 @@
 name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
 processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
+#define IDT_TRAY_CLICK 1001
+
 MainWindow::MainWindow(HINSTANCE hInstance) : m_hInstance(hInstance) {
 	// 加载应用图标（大、小）
 	m_hIconLarge = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_USBDRIVEMGR),
 		IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR);
-	if (!m_hIconLarge) m_hIconLarge = LoadIcon(nullptr, IDI_APPLICATION);   // 回退到默认图标
+	if (!m_hIconLarge) m_hIconLarge = LoadIcon(nullptr, IDI_APPLICATION);
 
 	m_hIconSmall = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_USBDRIVEMGR),
 		IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
@@ -31,8 +33,8 @@ MainWindow::MainWindow(HINSTANCE hInstance) : m_hInstance(hInstance) {
 	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
 	wc.lpszClassName = L"USBManagerWindowClass";
-	wc.hIcon = m_hIconLarge;      // 设置窗口大图标
-	wc.hIconSm = m_hIconSmall;    // 设置窗口小图标
+	wc.hIcon = m_hIconLarge;
+	wc.hIconSm = m_hIconSmall;
 	RegisterClassExW(&wc);
 
 	// 创建字体
@@ -41,6 +43,7 @@ MainWindow::MainWindow(HINSTANCE hInstance) : m_hInstance(hInstance) {
 		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"微软雅黑");
 
 	m_bIsAdmin = IsUserAnAdmin() != FALSE;
+	m_bIgnoreNextLButtonUp = false;
 }
 
 MainWindow::~MainWindow() {
@@ -162,6 +165,11 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 			RefreshDriveList();
 			return 0;
 		}
+		else if (wParam == IDT_TRAY_CLICK) {
+			KillTimer(m_hWnd, IDT_TRAY_CLICK);
+			ShowEjectMenu();
+			return 0;
+		}
 		break;
 
 	case WM_SIZE:
@@ -169,11 +177,22 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 		return 0;
 
 	case WM_TRAYICON:
-		if (lParam == WM_LBUTTONDOWN || lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) {
-			ShowTrayMenu();
+		if (lParam == WM_LBUTTONUP) {
+			if (m_bIgnoreNextLButtonUp) {
+				m_bIgnoreNextLButtonUp = false;
+				return 0;
+			}
+			// 延迟弹出左键菜单，以便区分双击
+			SetTimer(m_hWnd, IDT_TRAY_CLICK, GetDoubleClickTime(), nullptr);
+			return 0;
+		}
+		else if (lParam == WM_RBUTTONUP) {
+			ShowMainMenu();
 			return 0;
 		}
 		else if (lParam == WM_LBUTTONDBLCLK) {
+			m_bIgnoreNextLButtonUp = true;
+			KillTimer(m_hWnd, IDT_TRAY_CLICK);
 			ShowWindow(m_hWnd, SW_SHOW);
 			SetForegroundWindow(m_hWnd);
 			return 0;
@@ -186,6 +205,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
 	case WM_DESTROY:
 		KillTimer(m_hWnd, IDT_REFRESH_DRIVES);
+		KillTimer(m_hWnd, IDT_TRAY_CLICK);
 		PostQuitMessage(0);
 		return 0;
 
@@ -200,40 +220,33 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 void MainWindow::CreateMenuBar() {
-	// 创建主菜单
 	HMENU hMenuBar = CreateMenu();
 	if (!hMenuBar) return;
 
-	// 文件菜单
 	HMENU hFileMenu = CreatePopupMenu();
 	AppendMenuW(hFileMenu, MF_STRING, ID_FILE_EXIT, L"退出程序");
 	AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFileMenu, L"文件");
 
-	// 帮助菜单
 	HMENU hHelpMenu = CreatePopupMenu();
 	AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, L"关于");
 	AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GITHUB, L"转至 GitHub 仓库");
 	AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelpMenu, L"帮助");
 
-	// 设置窗口菜单
 	SetMenu(m_hWnd, hMenuBar);
 	m_hMenu = hMenuBar;
 }
 
 void MainWindow::CreateControls() {
-	// 标签
 	HWND hLabel = CreateWindowExW(0, L"STATIC", L"选择USB驱动器:",
 		WS_CHILD | WS_VISIBLE,
 		10, 12, 100, 20, m_hWnd, nullptr, m_hInstance, nullptr);
 	SendMessage(hLabel, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
-	// 下拉框
 	m_hComboDrive = CreateWindowExW(0, L"COMBOBOX", L"",
 		WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
 		130, 10, 120, 200, m_hWnd, (HMENU)IDC_COMBO_DRIVE, m_hInstance, nullptr);
 	SendMessage(m_hComboDrive, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
-	// 按钮
 	m_hBtnAnalyze = CreateWindowExW(0, L"BUTTON", L"分析占用",
 		WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
 		260, 10, 80, 25, m_hWnd, (HMENU)IDC_BTN_ANALYZE, m_hInstance, nullptr);
@@ -254,7 +267,6 @@ void MainWindow::CreateControls() {
 		510, 10, 80, 25, m_hWnd, (HMENU)IDC_BTN_EJECT, m_hInstance, nullptr);
 	SendMessage(m_hBtnEject, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
-	// 列表框
 	m_hListProc = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
 		WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL | WS_HSCROLL | LBS_EXTENDEDSEL,
 		10, 50, 580, 400, m_hWnd, (HMENU)IDC_LIST_PROC, m_hInstance, nullptr);
@@ -286,7 +298,6 @@ void MainWindow::LayoutControls() {
 void MainWindow::RefreshDriveList() {
 	std::vector<wchar_t> drives = USBDriveManager::GetUSBDrives();
 
-	// 构建显示字符串列表
 	std::vector<std::wstring> displayItems;
 	for (wchar_t d : drives) {
 		std::wstring label = USBDriveManager::GetVolumeLabel(d);
@@ -298,7 +309,6 @@ void MainWindow::RefreshDriveList() {
 		}
 	}
 
-	// 检查当前组合框内容是否变化
 	int currentCount = SendMessage(m_hComboDrive, CB_GETCOUNT, 0, 0);
 	bool changed = (currentCount != (int)displayItems.size());
 	if (!changed) {
@@ -313,7 +323,6 @@ void MainWindow::RefreshDriveList() {
 	}
 	if (!changed) return;
 
-	// 记住当前选中的盘符
 	int sel = SendMessage(m_hComboDrive, CB_GETCURSEL, 0, 0);
 	wchar_t selDrive = L'\0';
 	if (sel != CB_ERR) {
@@ -322,13 +331,11 @@ void MainWindow::RefreshDriveList() {
 		}
 	}
 
-	// 清空并重新填充
 	SendMessage(m_hComboDrive, CB_RESETCONTENT, 0, 0);
 	for (const auto& item : displayItems) {
 		SendMessage(m_hComboDrive, CB_ADDSTRING, 0, (LPARAM)item.c_str());
 	}
 
-	// 恢复选中项
 	if (!drives.empty()) {
 		int idx = CB_ERR;
 		if (selDrive) {
@@ -454,12 +461,10 @@ void MainWindow::ShowNotification(const std::wstring& title, const std::wstring&
 	m_nid.uFlags = 0;
 }
 
-void MainWindow::ShowTrayMenu() {
+// 左键单击：仅显示弹出驱动器菜单
+void MainWindow::ShowEjectMenu() {
 	HMENU hMenu = CreatePopupMenu();
 	if (!hMenu) return;
-
-	AppendMenuW(hMenu, MF_STRING, 1, L"显示主界面");
-	AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
 	std::vector<wchar_t> drives = USBDriveManager::GetUSBDrives();
 	const int cmdBase = 100;
@@ -472,8 +477,37 @@ void MainWindow::ShowTrayMenu() {
 			item = std::format(L"弹出 {}: ({})", drives[i], label);
 		AppendMenuW(hMenu, MF_STRING, cmdBase + i, item.c_str());
 	}
-	if (!drives.empty())
-		AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+	if (drives.empty()) {
+		AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, L"无USB驱动器");
+	}
+
+	POINT pt;
+	GetCursorPos(&pt);
+	SetForegroundWindow(m_hWnd);
+	UINT cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, m_hWnd, nullptr);
+	PostMessageW(m_hWnd, WM_NULL, 0, 0);
+	DestroyMenu(hMenu);
+
+	if ((int)cmd >= cmdBase && (int)cmd < cmdBase + (int)drives.size()) {
+		wchar_t drive = drives[cmd - cmdBase];
+		auto result = USBDriveManager::SafeEject(drive, m_hWnd);
+		if (result == USBDriveManager::EjectError::None) {
+			ShowNotification(L"USB设备已安全弹出", std::format(L"驱动器 {}: 已成功弹出。", drive));
+			RefreshDriveList();
+		}
+		else if (result != USBDriveManager::EjectError::UserCancel) {
+			ShowNotification(L"USB弹出失败", std::format(L"驱动器 {}: 弹出失败。", drive), NIIF_ERROR);
+		}
+	}
+}
+
+// 右键单击：显示主菜单（显示主界面、退出）
+void MainWindow::ShowMainMenu() {
+	HMENU hMenu = CreatePopupMenu();
+	if (!hMenu) return;
+
+	AppendMenuW(hMenu, MF_STRING, 1, L"显示主菜单");
+	AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 	AppendMenuW(hMenu, MF_STRING, 2, L"退出");
 
 	POINT pt;
@@ -490,19 +524,6 @@ void MainWindow::ShowTrayMenu() {
 		break;
 	case 2:
 		DestroyWindow(m_hWnd);
-		break;
-	default:
-		if ((int)cmd >= cmdBase && (int)cmd < cmdBase + (int)drives.size()) {
-			wchar_t drive = drives[cmd - cmdBase];
-			auto result = USBDriveManager::SafeEject(drive, m_hWnd);
-			if (result == USBDriveManager::EjectError::None) {
-				ShowNotification(L"USB设备已安全弹出", std::format(L"驱动器 {}: 已成功弹出。", drive));
-				RefreshDriveList();
-			}
-			else if (result != USBDriveManager::EjectError::UserCancel) {
-				ShowNotification(L"USB弹出失败", std::format(L"驱动器 {}: 弹出失败。", drive), NIIF_ERROR);
-			}
-		}
 		break;
 	}
 }
