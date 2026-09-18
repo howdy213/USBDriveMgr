@@ -1,13 +1,16 @@
 ﻿#include "WinPch.h"
 
-#include <shlobj.h> 
 #include "MainWindow.h"
 #include "USBDriveManager.h"
 #include "Resource.h"
 #include <shellapi.h>
 #include <algorithm>
+#include <filesystem>
 #include <format>
 #include <ranges>
+
+#include "WinUtils/WinUtils.h"
+#include "WinUtils/INI.h"
 
 #pragma comment(lib, "Shell32.lib")
 #pragma comment(linker,"\"/manifestdependency:type='win32' \
@@ -42,12 +45,16 @@ MainWindow::MainWindow(HINSTANCE hInstance) : m_hInstance(hInstance) {
 		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
 		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"微软雅黑");
 
-	m_bIsAdmin = IsUserAnAdmin() != FALSE;
+	m_bIsAdmin = WinUtils::IsCurrentProcessAdmin();
 	m_bIgnoreNextLButtonUp = false;
+
+	LoadConfig();
+	ApplyTrayIcon();
 }
 
 MainWindow::~MainWindow() {
 	if (m_hFont) DeleteObject(m_hFont);
+	if (m_hTrayIcon) DestroyIcon(m_hTrayIcon);
 	if (m_hIconLarge) DestroyIcon(m_hIconLarge);
 	if (m_hIconSmall) DestroyIcon(m_hIconSmall);
 	if (m_hMenu) DestroyMenu(m_hMenu);
@@ -136,16 +143,21 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 			MessageBoxW(m_hWnd,
 				L"　　　　USB设备管理器"
 				L"　　　　　　　　　　　　　　　　　　\n"
-				L"　　　　版本 v1.0.0\n"
+				L"　　　　版本 v1.1.0\n"
 				L"　　　　作者：howdy213\n"
 				L"　　　　软件在 MIT License 下发布\n",
 				L"关于", MB_OK);
 			break;
 		case ID_HELP_GITHUB:
-			ShellExecuteW(m_hWnd, L"open",
-				L"https://github.com/howdy213/USBDriveMgr",
-				nullptr, nullptr, SW_SHOWNORMAL);
+			WinUtils::RunExternalProgram(L"https://github.com/howdy213/USBDriveMgr", L"open");
 			break;
+		case ID_SETTINGS_TRAY_DEFAULT: SetTrayIconStyle(TrayIconStyle::Default); break;
+		case ID_SETTINGS_TRAY_DARK:    SetTrayIconStyle(TrayIconStyle::Dark); break;
+		case ID_SETTINGS_TRAY_LIGHT:   SetTrayIconStyle(TrayIconStyle::Light); break;
+		case ID_SETTINGS_NOTIFY_DISABLED: SetNotifyMode(NotifyMode::Disabled); break;
+		case ID_SETTINGS_NOTIFY_INSERT:   SetNotifyMode(NotifyMode::InsertOnly); break;
+		case ID_SETTINGS_NOTIFY_EJECT:    SetNotifyMode(NotifyMode::EjectOnly); break;
+		case ID_SETTINGS_NOTIFY_ALL:      SetNotifyMode(NotifyMode::All); break;
 		default:
 			return DefWindowProc(m_hWnd, msg, wParam, lParam);
 		}
@@ -177,7 +189,15 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 		return 0;
 
 	case WM_TRAYICON:
-		if (lParam == WM_LBUTTONUP) {
+		if (lParam == NIN_BALLOONUSERCLICK) {
+			// 单击气泡通知：打开对应目标（如插入的驱动器）
+			if (!m_notifyClickTarget.empty()) {
+				WinUtils::RunExternalProgram(m_notifyClickTarget, L"open");
+				m_notifyClickTarget.clear();
+			}
+			return 0;
+		}
+		else if (lParam == WM_LBUTTONUP) {
 			if (m_bIgnoreNextLButtonUp) {
 				m_bIgnoreNextLButtonUp = false;
 				return 0;
@@ -227,6 +247,24 @@ void MainWindow::CreateMenuBar() {
 	AppendMenuW(hFileMenu, MF_STRING, ID_FILE_EXIT, L"退出程序");
 	AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFileMenu, L"文件");
 
+	// 设置菜单：托盘图标（三选一）、通知显示（四选一）
+	HMENU hSettingsMenu = CreatePopupMenu();
+
+	m_hMenuTrayIcon = CreatePopupMenu();
+	AppendMenuW(m_hMenuTrayIcon, MF_STRING, ID_SETTINGS_TRAY_DEFAULT, L"默认");
+	AppendMenuW(m_hMenuTrayIcon, MF_STRING, ID_SETTINGS_TRAY_DARK, L"深色");
+	AppendMenuW(m_hMenuTrayIcon, MF_STRING, ID_SETTINGS_TRAY_LIGHT, L"浅色");
+	AppendMenuW(hSettingsMenu, MF_POPUP, (UINT_PTR)m_hMenuTrayIcon, L"托盘图标");
+
+	m_hMenuNotify = CreatePopupMenu();
+	AppendMenuW(m_hMenuNotify, MF_STRING, ID_SETTINGS_NOTIFY_DISABLED, L"全部禁用");
+	AppendMenuW(m_hMenuNotify, MF_STRING, ID_SETTINGS_NOTIFY_INSERT, L"仅插入时");
+	AppendMenuW(m_hMenuNotify, MF_STRING, ID_SETTINGS_NOTIFY_EJECT, L"仅弹出时");
+	AppendMenuW(m_hMenuNotify, MF_STRING, ID_SETTINGS_NOTIFY_ALL, L"全部启用");
+	AppendMenuW(hSettingsMenu, MF_POPUP, (UINT_PTR)m_hMenuNotify, L"通知显示");
+
+	AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hSettingsMenu, L"设置");
+
 	HMENU hHelpMenu = CreatePopupMenu();
 	AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, L"关于");
 	AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GITHUB, L"转至 GitHub 仓库");
@@ -234,6 +272,7 @@ void MainWindow::CreateMenuBar() {
 
 	SetMenu(m_hWnd, hMenuBar);
 	m_hMenu = hMenuBar;
+	UpdateSettingsMenu();
 }
 
 void MainWindow::CreateControls() {
@@ -297,6 +336,7 @@ void MainWindow::LayoutControls() {
 
 void MainWindow::RefreshDriveList() {
 	std::vector<wchar_t> drives = USBDriveManager::GetUSBDrives();
+	DetectDriveChanges(drives);
 
 	std::vector<std::wstring> displayItems;
 	for (wchar_t d : drives) {
@@ -419,14 +459,14 @@ void MainWindow::EjectSelectedDrive() {
 
 	auto result = USBDriveManager::SafeEject(drive, m_hWnd);
 	if (result == USBDriveManager::EjectError::None) {
-		ShowNotification(L"USB设备已安全弹出", std::format(L"驱动器 {}: 已成功弹出。", drive));
+		ShowNotification(NotifyEvent::Eject, L"USB设备已安全弹出", std::format(L"驱动器 {}: 已成功弹出。", drive));
 		RefreshDriveList();
 	}
 	else if (result == USBDriveManager::EjectError::UserCancel) {
 		// 用户取消，什么都不做
 	}
 	else {
-		ShowNotification(L"USB弹出失败", std::format(L"驱动器 {}: 弹出失败，可能仍有占用或设备不支持。", drive), NIIF_ERROR);
+		ShowNotification(NotifyEvent::Eject, L"USB弹出失败", std::format(L"驱动器 {}: 弹出失败，可能仍有占用或设备不支持。", drive), NIIF_ERROR);
 	}
 }
 
@@ -436,7 +476,7 @@ void MainWindow::AddTrayIcon() {
 	m_nid.uID = 3001;
 	m_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
 	m_nid.uCallbackMessage = WM_TRAYICON;
-	m_nid.hIcon = m_hIconSmall;
+	m_nid.hIcon = m_hTrayIcon;
 
 	std::wstring tip = L"USB设备管理器";
 	if (m_bIsAdmin) {
@@ -451,7 +491,13 @@ void MainWindow::RemoveTrayIcon() {
 	Shell_NotifyIconW(NIM_DELETE, &m_nid);
 }
 
-void MainWindow::ShowNotification(const std::wstring& title, const std::wstring& message, DWORD flags) {
+void MainWindow::ShowNotification(NotifyEvent ev, const std::wstring& title, const std::wstring& message, DWORD flags, const std::wstring& clickTarget) {
+	if (m_notifyMode == NotifyMode::Disabled) return;
+	if (m_notifyMode == NotifyMode::InsertOnly && ev != NotifyEvent::Insert) return;
+	if (m_notifyMode == NotifyMode::EjectOnly && ev != NotifyEvent::Eject) return;
+
+	m_notifyClickTarget = clickTarget;
+
 	m_nid.cbSize = sizeof(NOTIFYICONDATAW);
 	m_nid.uFlags = NIF_INFO;
 	m_nid.dwInfoFlags = flags;
@@ -459,6 +505,115 @@ void MainWindow::ShowNotification(const std::wstring& title, const std::wstring&
 	wcsncpy_s(m_nid.szInfo, message.c_str(), _TRUNCATE);
 	Shell_NotifyIconW(NIM_MODIFY, &m_nid);
 	m_nid.uFlags = 0;
+}
+
+// 依据托盘图标样式重新加载图标并刷新托盘（窗口尚未创建时仅加载句柄）
+void MainWindow::ApplyTrayIcon() {
+	HICON hNew = LoadTrayIconHandle();
+	HICON hOld = m_hTrayIcon;
+	m_hTrayIcon = hNew;
+
+	if (m_hWnd) {
+		m_nid.hIcon = m_hTrayIcon;
+		m_nid.uFlags = NIF_ICON;
+		Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+		m_nid.uFlags = 0;
+	}
+
+	if (hOld && hOld != hNew) DestroyIcon(hOld);
+}
+
+HICON MainWindow::LoadTrayIconHandle() const {
+	int resId = IDI_USBDRIVEMGR;
+	if (m_trayStyle == TrayIconStyle::Dark) resId = IDI_TRAY_DARK;
+	else if (m_trayStyle == TrayIconStyle::Light) resId = IDI_TRAY_LIGHT;
+
+	HICON h = (HICON)LoadImageW(m_hInstance, MAKEINTRESOURCEW(resId),
+		IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
+	if (!h) h = CopyIcon(LoadIconW(nullptr, IDI_APPLICATION));
+	return h;
+}
+
+// 勾选当前设置项（单选）
+void MainWindow::UpdateSettingsMenu() {
+	if (!m_hMenu) return;
+	CheckMenuRadioItem(m_hMenuTrayIcon, (UINT)ID_SETTINGS_TRAY_DEFAULT, (UINT)ID_SETTINGS_TRAY_LIGHT,
+		(UINT)(ID_SETTINGS_TRAY_DEFAULT + (long long)m_trayStyle), MF_BYCOMMAND);
+	CheckMenuRadioItem(m_hMenuNotify, (UINT)ID_SETTINGS_NOTIFY_DISABLED, (UINT)ID_SETTINGS_NOTIFY_ALL,
+		(UINT)(ID_SETTINGS_NOTIFY_DISABLED + (long long)m_notifyMode), MF_BYCOMMAND);
+}
+
+void MainWindow::SetTrayIconStyle(TrayIconStyle style) {
+	m_trayStyle = style;
+	ApplyTrayIcon();
+	UpdateSettingsMenu();
+	SaveConfig();
+}
+
+void MainWindow::SetNotifyMode(NotifyMode mode) {
+	m_notifyMode = mode;
+	UpdateSettingsMenu();
+	SaveConfig();
+}
+
+// 读取设置：<程序目录>\config\config.ini
+void MainWindow::LoadConfig() {
+	std::filesystem::path path = WinUtils::GetCurrentProcessFSDir() / L"config" / L"config.ini";
+	WinUtils::INIFile file(path);
+	WinUtils::INIStructure ini;
+	if (!file.read(ini)) return;
+
+	std::wstring tray = ini[L"Settings"].get(L"TrayIcon");
+	if (tray == L"dark") m_trayStyle = TrayIconStyle::Dark;
+	else if (tray == L"light") m_trayStyle = TrayIconStyle::Light;
+	else m_trayStyle = TrayIconStyle::Default;
+
+	std::wstring notify = ini[L"Settings"].get(L"Notify");
+	if (notify == L"disabled") m_notifyMode = NotifyMode::Disabled;
+	else if (notify == L"insert") m_notifyMode = NotifyMode::InsertOnly;
+	else if (notify == L"all") m_notifyMode = NotifyMode::All;
+	else m_notifyMode = NotifyMode::EjectOnly;
+}
+
+void MainWindow::SaveConfig() {
+	std::filesystem::path dir = WinUtils::GetCurrentProcessFSDir() / L"config";
+	std::error_code ec;
+	std::filesystem::create_directories(dir, ec);
+
+	const wchar_t* tray = L"default";
+	if (m_trayStyle == TrayIconStyle::Dark) tray = L"dark";
+	else if (m_trayStyle == TrayIconStyle::Light) tray = L"light";
+
+	const wchar_t* notify = L"eject";
+	if (m_notifyMode == NotifyMode::Disabled) notify = L"disabled";
+	else if (m_notifyMode == NotifyMode::InsertOnly) notify = L"insert";
+	else if (m_notifyMode == NotifyMode::All) notify = L"all";
+
+	WinUtils::INIStructure ini;
+	ini[L"Settings"][L"TrayIcon"] = tray;
+	ini[L"Settings"][L"Notify"] = notify;
+
+	WinUtils::INIFile file(dir / L"config.ini");
+	file.generate(ini, true);
+}
+
+// 对比上次刷新结果，对新出现的驱动器发送插入通知
+void MainWindow::DetectDriveChanges(const std::vector<wchar_t>& drives) {
+	if (!m_drivesInitialized) {
+		m_lastDrives = drives;
+		m_drivesInitialized = true;
+		return;
+	}
+
+	for (wchar_t d : drives) {
+		if (std::ranges::find(m_lastDrives, d) != m_lastDrives.end()) continue;
+		std::wstring label = USBDriveManager::GetVolumeLabel(d);
+		std::wstring msg = label.empty()
+			? std::format(L"驱动器 {}: 已插入，单击以打开文件资源管理器。", d)
+			: std::format(L"驱动器 {}: ({}) 已插入，单击以打开文件资源管理器。", d, label);
+		ShowNotification(NotifyEvent::Insert, L"USB设备已插入", msg, NIIF_INFO, std::format(L"{}:\\", d));
+	}
+	m_lastDrives = drives;
 }
 
 // 左键单击：仅显示弹出驱动器菜单
@@ -492,11 +647,11 @@ void MainWindow::ShowEjectMenu() {
 		wchar_t drive = drives[cmd - cmdBase];
 		auto result = USBDriveManager::SafeEject(drive, m_hWnd);
 		if (result == USBDriveManager::EjectError::None) {
-			ShowNotification(L"USB设备已安全弹出", std::format(L"驱动器 {}: 已成功弹出。", drive));
+			ShowNotification(NotifyEvent::Eject, L"USB设备已安全弹出", std::format(L"驱动器 {}: 已成功弹出。", drive));
 			RefreshDriveList();
 		}
 		else if (result != USBDriveManager::EjectError::UserCancel) {
-			ShowNotification(L"USB弹出失败", std::format(L"驱动器 {}: 弹出失败。", drive), NIIF_ERROR);
+			ShowNotification(NotifyEvent::Eject, L"USB弹出失败", std::format(L"驱动器 {}: 弹出失败。", drive), NIIF_ERROR);
 		}
 	}
 }

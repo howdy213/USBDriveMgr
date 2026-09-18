@@ -3,5 +3,8 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="USBDriveMgr.vcxproj" Id="aae19684-fe03-49ed-a395-e4d3207aeead" />
+  <Project Path="deps/WinUtils/WinUtils.vcxproj" Id="dff34332-c7db-4db1-b464-1d2313a45af0" />
+  <Project Path="USBDriveMgr.vcxproj" Id="aae19684-fe03-49ed-a395-e4d3207aeead">
+    <BuildDependency Project="deps/WinUtils/WinUtils.vcxproj" />
+  </Project>
 </Solution>

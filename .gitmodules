@@ -1,0 +1,3 @@
+[submodule "deps/WinUtils"]
+	path = deps/WinUtils
+	url = https://github.com/howdy213/WinUtils
