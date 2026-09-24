@@ -29,8 +29,6 @@ namespace {
 	std::wstring VolumePath(wchar_t driveLetter) {
 		return std::format(L"\\\\.\\{}:", driveLetter);
 	}
-
-
 }
 
 // 判断路径是否在指定驱动器上（忽略大小写）
